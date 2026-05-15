@@ -4,8 +4,11 @@ import com.spring.ai.first.springai.service.ChatService;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import reactor.core.publisher.Flux;
 
 @RestController
 public class ChatController {
@@ -35,8 +38,17 @@ public class ChatController {
     // @GetMapping("/chat")
 
     @GetMapping("/chat")
-    public ResponseEntity<String> chat(@RequestParam(value = "q", required = true) String q) {
+    public ResponseEntity<String> chat(@RequestParam(value = "q", required = true) String q,
+            @RequestHeader("userId") String userId) {
 
-        return ResponseEntity.ok(chatService.chatTemplate(q));
+        return ResponseEntity.ok(chatService.chatTemplate(q, userId));
     }
+
+    @GetMapping("/stream-chat")
+    public ResponseEntity<Flux<String>> streamChat(
+            @RequestParam(value = "q", required = true) String query) {
+
+        return ResponseEntity.ok(this.chatService.streamChat(query));
+    }
+
 }

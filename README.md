@@ -38,6 +38,10 @@ This README documents our progress, architectural design, and the essential conc
    - [Pre-built Advisors](#-sample-pre-built-advisors)
    - [Creating a Custom Advisor](#-creating-a-custom-advisor)
    - [Configuring Advisors](#️-configuring-advisors)
+6. [🧠 Chat Memory (Contextual Conversations)](#-6-chat-memory-contextual-conversations)
+   - [What is Chat Memory?](#-what-is-chat-memory)
+   - [Core Implementation (Main Logic)](#-core-implementation-main-logic)
+   - [Memory Storage Options](#️-memory-storage-options)
 
 ---
 
@@ -323,6 +327,56 @@ public ChatClient chatClient(ChatClient.Builder builder) {
                 .maxTokens(200)
                 .build())
         .build();
+}
+```
+
+<hr/>
+
+## 🧠 6. Chat Memory (Contextual Conversations)
+
+### 🧐 What is Chat Memory?
+By default, AI models are **stateless** and forget past interactions. **Chat Memory** injects previous conversation history into new requests so the AI can maintain context and remember what you just talked about!
+
+### 💻 Core Implementation (Main Logic)
+To enable chat memory, you simply add the `MessageChatMemoryAdvisor` to your `ChatClient` builder. This interceptor automatically appends the chat history to the prompt before calling the LLM.
+
+```java
+// Just inject a ChatMemory bean and add the Advisor to the chain!
+MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
+
+return builder
+    .defaultAdvisors(memoryAdvisor) // Automatically handles history!
+    .build();
+```
+
+### 🗄️ Memory Storage Options
+Spring AI lets you define *where* this memory is stored by simply creating a `@Bean` of type `ChatMemory`. To prevent infinite token growth and save costs, we typically wrap our memory in a `MessageWindowChatMemory` to keep only the last *N* messages.
+
+**Option A: In-Memory (Great for Testing)**
+Stores history in RAM. Simple and fast, but history is lost on server restart. 
+```java
+@Bean
+public ChatMemory chatMemory() {
+    return MessageWindowChatMemory.builder()
+            .chatMemoryRepository(new InMemoryChatMemory())
+            .maxMessages(2) // Keeps only the 2 most recent messages
+            .build();
+}
+```
+
+**Option B: Database Storage with MySQL (Production Ready)**
+If you want history to survive application restarts and scale across multiple servers, you can back your memory with a SQL Database!
+1. Add `spring-ai-starter-model-chat-memory-repository-jdbc` and `mysql-connector-j` to your `pom.xml`.
+2. Add `spring.ai.chat.memory.repository.jdbc.initialize-schema=ALWAYS` to your `application.properties`.
+3. Spring auto-creates a `JdbcChatMemoryRepository` bean that you can inject directly:
+
+```java
+@Bean
+public ChatMemory chatMemory(JdbcChatMemoryRepository jdbcChatMemoryRepository) {
+    return MessageWindowChatMemory.builder()
+            .chatMemoryRepository(jdbcChatMemoryRepository) // Backed by MySQL!
+            .maxMessages(2)
+            .build();
 }
 ```
 
