@@ -1,25 +1,24 @@
 package com.spring.ai.first.springai;
 
-import com.spring.ai.first.springai.service.ChatService;
-
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
+import com.spring.ai.first.springai.helper.Helper;
+import com.spring.ai.first.springai.service.ChatService;
+
 @SpringBootTest
 class SpringaiApplicationTests {
-	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SpringaiApplicationTests.class);
 
-	@Test
-	void contextLoads() {
-	}
+    @Autowired
+    private ChatService chatService;
 
-	@Autowired
-	private ChatService chatService;
+    @Test
+    void saveDataTOVectorDB() {
 
-	// @Test
-	// void testTemplateRenderer() {
-	// var output = this.chatService.chatTemplate();
-	// System.out.println(output);
-	// }
+        System.out.println("Saving data to vector store...");
+        this.chatService.saveData(Helper.getData());
+        System.out.println("Data saved to vector store...");
+
+    }
 }

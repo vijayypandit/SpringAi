@@ -15,7 +15,7 @@ Spring AI is an application framework that brings the portability and modular de
 ### ⚡ Why Groq?
 Groq has developed custom hardware (LPUs - Language Processing Units) specifically designed for running AI models. By using Groq's API (which is perfectly compatible with the OpenAI specification), we can run powerful open-source models like LLaMA 3 with unprecedented, blazing-fast speed.
 
-This README documents our progress, architectural design, and the essential concepts we have implemented so far.
+This README documents our progress, architectural design, and the essential concepts we have implemented so far, including **Vector Databases, Embeddings, and Memory Management**.
 
 ---
 
@@ -24,24 +24,10 @@ This README documents our progress, architectural design, and the essential conc
 1. [🚀 Running This Project](#-running-this-project)
 2. [🏗️ Architecture & Design](#️-architecture--design)
 3. [🧠 Spring AI Concepts & What We Learned](#-spring-ai-concepts--what-we-learned)
-   - [1. Models](#1-models)
-   - [2. Prompts & Prompting](#2-prompts--prompting)
-   - [3. Parsing & Output Converters](#3-parsing--output-converters)
-   - [4. Default Prompts Configuration](#4-default-prompts-configuration)
 4. [📝 Dynamic Prompt Templating](#-4-dynamic-prompt-templating)
-   - [Approach A: Classpath Resources](#approach-a-fluent-api-with-classpath-resources-best-practice)
-   - [Approach B: Explicit Templates](#approach-b-explicit-prompt-and-message-templates)
-   - [Approach C: Inline Parameterization](#approach-c-inline-parameterization-with-fluent-api)
 5. [🛡️ Spring AI Advisors (Interceptors)](#️-5-spring-ai-advisors-interceptors)
-   - [What are Advisors?](#-what-are-advisors)
-   - [Why Use Advisors?](#-why-use-advisors)
-   - [Pre-built Advisors](#-sample-pre-built-advisors)
-   - [Creating a Custom Advisor](#-creating-a-custom-advisor)
-   - [Configuring Advisors](#️-configuring-advisors)
 6. [🧠 Chat Memory (Contextual Conversations)](#-6-chat-memory-contextual-conversations)
-   - [What is Chat Memory?](#-what-is-chat-memory)
-   - [Core Implementation (Main Logic)](#-core-implementation-main-logic)
-   - [Memory Storage Options](#️-memory-storage-options)
+7. [🗃️ Vector Store, Embeddings & RAG](#️-7-vector-store-embeddings--rag)
 
 ---
 
@@ -51,9 +37,11 @@ This README documents our progress, architectural design, and the essential conc
 - Java 17+
 - Maven
 - [Groq Cloud API Key](https://console.groq.com/keys)
+- MariaDB (running locally on port 3308 for Vector Store)
+- Ollama (running locally with `nomic-embed-text` model)
 
 ### 2. Configuration
-Set your Groq API Key in `src/main/resources/application.properties`:
+Set your properties in `src/main/resources/application.properties`:
 ```properties
 spring.application.name=springai
 server.port=8082
@@ -61,6 +49,18 @@ server.port=8082
 # Groq API Configuration
 spring.ai.openai.api-key=gsk_your_groq_api_key_here
 spring.ai.openai.base-url=https://api.groq.com/openai
+
+# Ollama Embeddings
+spring.ai.ollama.base-url=http://localhost:11434
+spring.ai.ollama.embedding.options.model=nomic-embed-text
+
+# MariaDB Vector Database
+spring.datasource.url=jdbc:mariadb://localhost:3308/springai
+spring.datasource.username=root
+spring.datasource.password=root
+spring.ai.vectorstore.mariadb.initialize-schema=true
+spring.ai.vectorstore.mariadb.distance-type=COSINE
+spring.ai.vectorstore.mariadb.dimensions=768
 ```
 
 ### 3. Build & Run
@@ -95,11 +95,7 @@ graph TD
 
 ### 1. Models
 **What are Models?**  
-Large Language Models (LLMs) are AI engines trained on vast amounts of text. They predict and generate text based on your input. Spring AI abstracts different models (OpenAI, Anthropic, Ollama, Groq) so you can switch them out without changing your code.
-
-**Ways to implement models in Spring AI:**
-- Using `ChatModel` (Low-level underlying interface)
-- Using `ChatClient` (High-level fluent API built on top of `ChatModel` - *This is what we use!*)
+Large Language Models (LLMs) are AI engines trained on vast amounts of text. Spring AI abstracts different models (OpenAI, Anthropic, Ollama, Groq) so you can switch them out without changing your code.
 
 **Models We Are Using (Groq API):**
 | Provider | Model | Cost | Best For |
@@ -107,280 +103,176 @@ Large Language Models (LLMs) are AI engines trained on vast amounts of text. The
 | Groq | Llama 3.1 8B Instant | Free | Fast, general-purpose queries |
 | Groq | Llama 4 Scout 17B | Free | Advanced reasoning and coding |
 
----
-
 ### 2. The ChatClient Fluent API & Prompting
-**What is a Prompt?**  
-A prompt is the instruction or context you send to the AI. In Spring AI, a `Prompt` object is a container that holds a list of `Message` objects (like `UserMessage`, `SystemMessage`) and model configuration options (`ChatOptions`).
-
-**The Power of the Fluent API:**
-While you *can* manually create raw `Prompt` objects, Spring AI's `ChatClient` provides a powerful **Fluent API**. This allows you to chain methods together in a highly readable, step-by-step builder pattern: `.prompt()` ➡️ `.system()` ➡️ `.user()` ➡️ `.call()` ➡️ `.content()`.
-
-Here is why the Fluent API is the absolute standard for Spring AI:
-
-1. **Dynamic Templating (Placeholders):** 
-   You never have to use messy string concatenation (like `"Hello " + name + "!"`). Spring AI natively handles template placeholders. You simply write variables inside `{brackets}` and use the `.param()` method to safely inject dynamic variables at runtime.
-2. **External File Support (`Resource`):**
-   Writing massive prompt instructions inside Java strings makes code ugly and hard to maintain. The Fluent API can natively read `org.springframework.core.io.Resource` objects. You can save your prompts as `.txt` files in your `src/main/resources` folder, and Spring will automatically read them *and* substitute their `{placeholders}`!
-3. **Role Separation:**
-   You can effortlessly separate instructions using `.system()` (defining the AI's rules and persona) and `.user()` (the actual query) in a single fluid chain.
-
-**Basic Concept Example:**
-```java
-chatClient.prompt()
-          // Reads from string, dynamically injecting 'Java' into {subject}
-          .system(s -> s.text("Act as an expert in {subject}").param("subject", "Java"))
-          .user("Explain what a NullPointerException is.")
-          .call()
-          .content();
-```
-*(Check out Section 4 below to see exactly how we implemented these advanced file resources and templates in this project!)*
-
----
-
-### 3. Parsing & Output Converters
-**What is Parsing?**  
-AI models natively return raw text. Parsing (or Output Converters) is the process of instructing the AI to return data in a specific structure and then extracting that data into Java Objects, Lists, or Maps.
-
-**Ways to parse data in Spring AI:**
-1. **Raw String:** Using `.content()` (Extracts simple text).
-2. **Entity Type Extraction:** Using `.entity(MyClass.class)` to automatically map the AI's JSON output directly into a Java Class or Record.
-3. **Structured Output Converters:** Spring AI provides tools like `BeanOutputConverter`, `ListOutputConverter`, or `MapOutputConverter` for advanced mapping.
-   ```java
-   // Example: Parsing a list of strings directly
-   List<String> list = chatClient.prompt("Give me 5 colors")
-       .call()
-       .entity(new ParameterizedTypeReference<List<String>>() {});
-   ```
-
----
-
-### 4. Default Prompts Configuration
-To avoid repeating system prompts (like the AI's persona) and configuration options in every API call, we set defaults globally via the `ChatClient.Builder`.
-
-**Snippet from `AiConfig.java`:**
-```java
-@Bean
-public ChatClient chatClient(ChatClient.Builder builder) {
-    return builder
-            // Default Persona
-            .defaultSystem("You are a helpful assistant as a coding expert in Java")
-            // Default Model & Parameters
-            .defaultOptions(OpenAiChatOptions.builder()
-                    .model("meta-llama/llama-4-scout-17b-16e-instruct")
-                    .temperature(1.0)
-                    .build())
-            .build();
-}
-```
+While you can manually create raw `Prompt` objects, Spring AI's `ChatClient` provides a powerful **Fluent API**. This allows you to chain methods together in a highly readable, step-by-step builder pattern: `.prompt()` ➡️ `.system()` ➡️ `.user()` ➡️ `.call()` ➡️ `.content()`.
 
 ---
 
 ## 📝 4. Dynamic Prompt Templating
 
 **What are Prompt Templates?**
-Prompt Templates allow you to create dynamic, reusable prompts using placeholders (e.g., `{concept}`, `{techname}`). Spring AI evaluates these placeholders at runtime by replacing them with real data from a `Map` or parameters. This cleanly separates prompt engineering from your Java logic.
+Prompt Templates allow you to create dynamic, reusable prompts using placeholders (e.g., `{concept}`). Spring AI evaluates these placeholders at runtime.
 
-We have implemented dynamic prompting using two distinct approaches:
-
-### Approach A: Fluent API with Classpath Resources (Best Practice)
-Instead of hardcoding prompts in your Java classes, you can store them as plain text (`.txt`) files in your `src/main/resources` folder. Spring's `@Value` annotation injects these files as `Resource` objects, which the `ChatClient` can natively parse and inject parameters into.
-
+We primarily use **Classpath Resources** to separate text from code:
 ```java
-// Injecting text files from src/main/resources/prompts/
 @Value("classpath:prompts/user-message.txt")
 private Resource userMessage;
 
 @Value("classpath:prompts/system-message.txt")
 private Resource systemMessage;
 
-public String chatTemplate() {
+public String chatTemplate(String query) {
     return this.chatClient
             .prompt()
             .system(system -> system.text(this.systemMessage))
-            .user(user -> user.text(this.userMessage)
-                              .param("concept", "SpringBoot Framework validation"))
+            .user(user -> user.text(this.userMessage).param("query", query))
             .call()
             .content();
 }
 ```
 
-### Approach B: Explicit Prompt and Message Templates
-This approach involves manually building `SystemPromptTemplate` and `PromptTemplate` objects, passing parameters via `Map.of()`, and generating concrete `Message` objects. These messages are then bundled into a `Prompt` wrapper before calling the API.
-
-```java
-public String chatTemplate() {
-    // 1. Build the System Message
-    var systemPromptTemplate = SystemPromptTemplate.builder()
-            .template("You are a helpful assistant. You are a coding expert.")
-            .build();
-    var systemMessage = systemPromptTemplate.createMessage();
-
-    // 2. Build the User Message with dynamic parameters
-    var userPromptTemplate = PromptTemplate.builder()
-            .template("what is {techname} tell me about {techExample}")
-            .build();
-    var userMessage = userPromptTemplate.createMessage(Map.of(
-            "techname", "java",
-            "techExample", "SpringBoot"));
-
-    // 3. Wrap messages in a Prompt and call the API
-    Prompt prompt = new Prompt(systemMessage, userMessage);
-    return this.chatClient.prompt(prompt).call().content();
-}
-```
-
-### Approach C: Inline Parameterization with Fluent API
-If you don't want to use external files or build complex objects, you can dynamically construct and enrich prompts inline. This is incredibly useful for intercepting a user's raw query and wrapping it in strict instructions before sending it to the model.
-
-```java
-public String chat(String query) {
-    // We wrap the user's raw query with explicit instructions
-    String queryStr = "As an expert in coding and programming. Always write programs in Java. Now reply to this question: {query}";
-
-    return chatClient
-            .prompt()
-            // We pass the template string and substitute {query} inline!
-            .user(u -> u.text(queryStr).param("query", query))
-            .call()
-            .content();
-}
-```
-
-<hr/>
+---
 
 ## 🛡️ 5. Spring AI Advisors (Interceptors)
 
 ### 🌟 What are Advisors?
-In Spring AI, **Advisors** act as interceptors (or middleware) that wrap around your AI requests and responses. They allow you to observe, modify, or completely block a request *before* it goes to the AI model, and observe or modify the response *after* it returns. 
+In Spring AI, **Advisors** act as interceptors (or middleware) that wrap around your AI requests and responses. They allow you to observe, modify, or block a request *before* it goes to the AI model, and observe the response *after*.
 
-### 🎯 Why Use Advisors?
-- **Logging & Monitoring:** Track input prompts, output responses, and token usage precisely.
-- **Safety & Guardrails:** Block malicious prompts or prevent the AI from discussing restricted topics (e.g., Profanity filters).
-- **Memory Management:** Automatically inject past conversation history into new requests (Chat Memory) for continuous chat experiences.
-- **Security:** Sanitize inputs or mask PII data before they hit the LLM.
+### 📦 Pre-built & Custom Advisors
+- **`TokenPrintAdvisor` (Custom)**: Logs the request, response, and calculates token usage!
+- **`SafeGuardAdvisor`**: Validates the prompt (e.g., blocks queries about "games").
+- **`MessageChatMemoryAdvisor`**: Automatically stores and retrieves previous conversation messages.
 
-### 🛠️ How Can We Use Them?
-You can easily attach Advisors to your `ChatClient` using the `.defaultAdvisors()` builder method. Once attached, every request made by that client will automatically flow through the configured advisor chain!
-
-### 📦 Sample Pre-built Advisors
-Spring AI comes with several powerful out-of-the-box advisors ready to use:
-- **`SimpleLoggerAdvisor`**: Logs the raw request sent to the LLM and the raw response received.
-- **`SafeGuardAdvisor`**: Validates the prompt and throws an exception if it contains prohibited words/topics.
-- **`MessageChatMemoryAdvisor`**: Automatically stores and retrieves previous conversation messages to maintain context across API calls.
-- **`PromptChatMemoryAdvisor`**: Similar to the above, but injects memory into a specific section of the prompt template.
-
-### 🎨 Creating a Custom Advisor
-We created our own custom advisor, `TokenPrintAdvisor`, to log the request, response, and calculate the exact token usage of our Groq LLM calls!
-
-To create a custom advisor, simply implement `CallAdvisor` (and/or `StreamAdvisor`) and override the `adviseCall` method:
-
-```java
-public class TokenPrintAdvisor implements CallAdvisor, StreamAdvisor {
-
-    private static final Logger logger = LoggerFactory.getLogger(TokenPrintAdvisor.class);
-
-    @Override
-    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
-        logger.info("My token advisor is called");
-        logger.info("Request: " + request.prompt().getContents());
-        
-        // Let the request proceed to the next advisor / LLM
-        ChatClientResponse response = chain.nextCall(request);
-        
-        logger.info("Token Advisor : Response received from Model...........");
-        logger.info("Response  : " + response.chatResponse().getResult().getOutput().getText());
-        logger.info("Total Tokens: " + response.chatResponse().getMetadata().getUsage().getTotalTokens());
-
-        return response;
-    }
-
-    @Override
-    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
-        return null; // Implementation for streaming interactions
-    }
-
-    @Override
-    public String getName() { return "TokenPrintAdvisor"; }
-
-    @Override
-    public int getOrder() { return 0; }
-}
-```
-
-### ⚙️ Configuring Advisors
-We configured both our custom `TokenPrintAdvisor` and the pre-built `SafeGuardAdvisor` (to strictly block any prompts about "games") globally in our `AiConfig`. This ensures all chat calls abide by these rules.
-
-```java
-@Bean
-public ChatClient chatClient(ChatClient.Builder builder) {
-    return builder
-        // Adding our Custom Advisor & SafeGuard Advisor to the chain
-        .defaultAdvisors(
-            new TokenPrintAdvisor(), 
-            new SafeGuardAdvisor(List.of("games")) // Blocks prompts related to games
-        )
-        .defaultSystem("you are a helpful assistant as a coding expert in java")
-        .defaultOptions(OpenAiChatOptions.builder()
-                .model("meta-llama/llama-4-scout-17b-16e-instruct")
-                .temperature(1.0)
-                .maxTokens(200)
-                .build())
-        .build();
-}
-```
-
-<hr/>
+---
 
 ## 🧠 6. Chat Memory (Contextual Conversations)
 
 ### 🧐 What is Chat Memory?
-By default, AI models are **stateless** and forget past interactions. **Chat Memory** injects previous conversation history into new requests so the AI can maintain context and remember what you just talked about!
+By default, AI models are **stateless** and forget past interactions. **Chat Memory** injects previous conversation history into new requests so the AI can maintain context.
 
-### 💻 Core Implementation (Main Logic)
-To enable chat memory, you simply add the `MessageChatMemoryAdvisor` to your `ChatClient` builder. This interceptor automatically appends the chat history to the prompt before calling the LLM.
+### 🗄️ In-Memory Storage (`InMemoryChatMemoryRepository`)
+We are currently using the `InMemoryChatMemoryRepository` coupled with a `MessageWindowChatMemory` to keep track of the conversation context.
 
-```java
-// Just inject a ChatMemory bean and add the Advisor to the chain!
-MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
-
-return builder
-    .defaultAdvisors(memoryAdvisor) // Automatically handles history!
-    .build();
-```
-
-### 🗄️ Memory Storage Options
-Spring AI lets you define *where* this memory is stored by simply creating a `@Bean` of type `ChatMemory`. To prevent infinite token growth and save costs, we typically wrap our memory in a `MessageWindowChatMemory` to keep only the last *N* messages.
-
-**Option A: In-Memory (Great for Testing)**
-Stores history in RAM. Simple and fast, but history is lost on server restart. 
 ```java
 @Bean
 public ChatMemory chatMemory() {
+    InMemoryChatMemoryRepository inMemoryChatMemoryRepository = new InMemoryChatMemoryRepository();
+    
     return MessageWindowChatMemory.builder()
-            .chatMemoryRepository(new InMemoryChatMemory())
+            .chatMemoryRepository(inMemoryChatMemoryRepository)
             .maxMessages(2) // Keeps only the 2 most recent messages
             .build();
 }
 ```
 
-**Option B: Database Storage with MySQL (Production Ready)**
-If you want history to survive application restarts and scale across multiple servers, you can back your memory with a SQL Database!
-1. Add `spring-ai-starter-model-chat-memory-repository-jdbc` and `mysql-connector-j` to your `pom.xml`.
-2. Add `spring.ai.chat.memory.repository.jdbc.initialize-schema=ALWAYS` to your `application.properties`.
-3. Spring auto-creates a `JdbcChatMemoryRepository` bean that you can inject directly:
+**📌 Purpose:**
+It acts as a temporary storage map within the application's RAM to hold conversation histories mapped by a session ID.
 
+✅ **Pros:**
+- **Extremely Fast:** Data is retrieved directly from RAM with zero network latency.
+- **Easy Setup:** No need to install, configure, or connect to external databases.
+- **Great for Testing:** Perfect for local development and verifying memory logic.
+
+❌ **Cons:**
+- **Volatile:** All chat history is permanently lost when the application restarts or crashes.
+- **Not Scalable:** Does not work in a multi-instance (distributed) environment, as memory is localized to one specific server.
+
+---
+
+## 🗃️ 7. Vector Store, Embeddings & RAG
+
+To make our AI smarter about our own private data, we implemented a **RAG (Retrieval-Augmented Generation)** architecture using embeddings and a Vector Store!
+
+### 🧬 What is an Embedding and a Vector?
+- **Embedding:** An embedding is a process that translates text (words, sentences) into an array of numbers (a Vector) that captures the semantic meaning of that text.
+- **Vector:** An array of floating-point numbers. If two sentences mean similar things, their vectors will be mathematically close to each other in a multidimensional space.
+
+We use **Ollama** with the `nomic-embed-text` model to generate these embeddings!
+
+### 🐬 MariaDB Vector Store
+Instead of storing our data in memory, we persist our embeddings in a relational database optimized for vector search: **MariaDB**.
+- MariaDB computes the **COSINE distance** to find vectors (sentences) that are semantically similar to the user's query.
+- It is configured in our `application.properties` to automatically initialize the schema with a dimensionality of **768** (which matches `nomic-embed-text`).
+
+### 📦 Storing Data via `Helper.java`
+We created a `Helper` class to supply dummy document data (e.g., facts about the Java programming language).
+We take these strings, wrap them into Spring AI `Document` objects, and save them directly into the MariaDB Vector Store:
 ```java
-@Bean
-public ChatMemory chatMemory(JdbcChatMemoryRepository jdbcChatMemoryRepository) {
-    return MessageWindowChatMemory.builder()
-            .chatMemoryRepository(jdbcChatMemoryRepository) // Backed by MySQL!
-            .maxMessages(2)
-            .build();
+public void saveData(List<String> list) {
+    List<Document> documentList = list.stream().map(Document::new).toList();
+    this.vectorStore.add(documentList); // Automatically generates embeddings and saves to DB!
 }
 ```
 
-<hr/>
+### 🔍 Similarity Search & RAG Advisors
+When a user asks a question, we need to find relevant data in the DB and give it to the AI.
+We do this using Spring AI's powerful Advisors (like `QuestionAnswerAdvisor` or the newer `RetrievalAugmentationAdvisor`)!
+
+**How it works:**
+1. The user asks a question.
+2. The Advisor automatically takes the query and converts it to a vector.
+3. It performs a **Similarity Search** against MariaDB to find the most relevant documents.
+4. **Query Augmentation:** It uses the `ContextualQueryAugmenter` to take the retrieved documents and "augment" (inject) them into the AI's prompt. 
+   - *Pro Tip:* By setting `.allowEmptyContext(true)`, we guarantee that if the database finds *no* matching documents, the application won't fail. Instead, it allows the AI to gracefully fall back on its own baseline knowledge to answer the question!
+
+```java
+public String chatTemplate(String query, String userId) {
+    // Creating the Advisor to handle retrieval
+    var ragAdvisor = RetrievalAugmentationAdvisor.builder()
+            .documentRetriever(VectorStoreDocumentRetriever.builder()
+                    .vectorStore(vectorStore)
+                    .topK(3)
+                    .similarityThreshold(0.5)
+                    .build())
+            .queryAugmenter(ContextualQueryAugmenter.builder().allowEmptyContext(true).build())
+            .build();
+
+    return this.chatClient
+            .prompt()
+            // This single line automates the entire RAG flow!
+            .advisors(ragAdvisor)
+            .user(user -> user.text(this.userMessage).param("query", query))
+            .call()
+            .content();
+}
+```
+
+### 🛠️ Manual Similarity Search (Alternative Approach)
+Instead of using automated Advisors, we can also perform a **Manual Similarity Search**. This is highly useful when you need finer control over the context building, or want to modify the documents before sending them to the LLM.
+
+**How it works:**
+1. We manually build a `SearchRequest` specifying parameters like `topK` (number of results) and `similarityThreshold`.
+2. We query the `vectorStore` to get a list of `Document`s.
+3. We extract the text from these documents and join them into a single `contextData` string.
+4. We inject this `contextData` explicitly into our `SystemMessage` prompt template using `.param()`.
+
+```java
+public String chatTemplate(String query, String userId) {
+    // 1. Manually build the search request
+    SearchRequest searchRequest = SearchRequest.builder()
+            .topK(3)
+            .similarityThreshold(0.5)
+            .query(query)
+            .build();
+
+    // 2. Perform similarity search against MariaDB
+    List<Document> documents = this.vectorStore.similaritySearch(searchRequest);
+    
+    // 3. Extract text and format as context string
+    List<String> documentList = documents.stream().map(Document::getText).toList();
+    String contextData = String.join(",", documentList);
+
+    // 4. Inject contextData explicitly into the prompt
+    return this.chatClient
+            .prompt()
+            .system(system -> system.text(this.systemMessage).param("documents", contextData))
+            .user(user -> user.text(this.userMessage).param("query", query))
+            .call()
+            .content();
+}
+```
+
+---
 
 <div align="center">
   <h3>Ready to start building? 🚀</h3>

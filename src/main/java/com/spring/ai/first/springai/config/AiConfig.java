@@ -9,8 +9,8 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SafeGuardAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
-import org.springframework.ai.chat.memory.repository.jdbc.JdbcChatMemoryRepository;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -18,19 +18,30 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AiConfig {
 
+        // @Bean
+        // public ChatMemory chatMemory(JdbcChatMemoryRepository
+        // jdbcChatMemoryRepository) {
+        // return MessageWindowChatMemory.builder()
+        // .chatMemoryRepository(jdbcChatMemoryRepository)
+        // .maxMessages(2)
+        // .build();
+        // }
         @Bean
-        public ChatMemory chatMemory(JdbcChatMemoryRepository jdbcChatMemoryRepository) {
+        public ChatMemory chatMemory() {
+                InMemoryChatMemoryRepository inMemoryChatMemoryRepository = new InMemoryChatMemoryRepository();
+
                 return MessageWindowChatMemory.builder()
-                                .chatMemoryRepository(jdbcChatMemoryRepository)
+                                .chatMemoryRepository(inMemoryChatMemoryRepository)
                                 .maxMessages(2)
                                 .build();
+
         }
 
         private Logger logger = LoggerFactory.getLogger(AiConfig.class);
 
         /**
          * Chat Client for OpenAI
-         * 
+         *
          * @param builder
          * @return ChatClient
          */
@@ -45,7 +56,7 @@ public class AiConfig {
                 return builder
                                 .defaultAdvisors(messageChatMemoryAdvisor, new TokenPrintAdvisor(),
                                                 new SafeGuardAdvisor(List.of("games")))
-                                .defaultSystem("you are a helpful assistant as a coding expert in java")
+                                // .defaultSystem("you are a helpful assistant as a coding expert in java")
                                 .defaultOptions(OpenAiChatOptions.builder()
                                                 .model("meta-llama/llama-4-scout-17b-16e-instruct")
                                                 .temperature(1.0)
@@ -59,7 +70,6 @@ public class AiConfig {
         // public ChatClient openAiChatModel(OpenAiChatModel chatModel) {
         // return ChatClient.builder(chatModel).build();
         // }
-
         // Ollama Chat Client
         // @Bean(name = "ollamaChatClient")
         // public ChatClient ollamaChatModel(OllamaChatModel chatModel) {

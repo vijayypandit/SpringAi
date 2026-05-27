@@ -20,12 +20,10 @@ public class ChatController {
     }
 
     // private ChatClient openAiChatClient;
-
     // public ChatController(@Qualifier("openAiChatClient") ChatClient
     // openAiChatClient) {
     // this.openAiChatClient = openAiChatClient;
     // }
-
     // public ChatController(ChatClient.Builder chatClientBuilder) {
     // this.chatclient = chatClientBuilder.build();
     // }
@@ -34,9 +32,7 @@ public class ChatController {
     // .builder(openAiChatModel)
     // .build();
     // }
-
     // @GetMapping("/chat")
-
     @GetMapping("/chat")
     public ResponseEntity<String> chat(@RequestParam(value = "q", required = true) String q,
             @RequestHeader("userId") String userId) {
