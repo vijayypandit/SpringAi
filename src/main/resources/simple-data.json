@@ -1,0 +1,20 @@
+[
+    {
+        "id": "1",
+        "title": "Spring AI Introduction",
+        "content": "Spring AI is an application framework that simplifies the development of AI-powered applications.",
+        "category": "Technology"
+    },
+    {
+        "id": "2",
+        "title": "Cricket Rules Summary",
+        "content": "Cricket is played between two teams of 11 players. The goal is to score more runs than the opposition.",
+        "category": "Sports"
+    },
+    {
+        "id": "3",
+        "title": "Retrieval Augmented Generation",
+        "content": "RAG combines the power of retrieval models and generative models to produce more accurate and contextual answers.",
+        "category": "Artificial Intelligence"
+    }
+]

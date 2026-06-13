@@ -28,6 +28,8 @@ This README documents our progress, architectural design, and the essential conc
 5. [🛡️ Spring AI Advisors (Interceptors)](#️-5-spring-ai-advisors-interceptors)
 6. [🧠 Chat Memory (Contextual Conversations)](#-6-chat-memory-contextual-conversations)
 7. [🗃️ Vector Store, Embeddings & RAG](#️-7-vector-store-embeddings--rag)
+8. [🌟 Advanced RAG Pipeline (Modular RAG)](#-8-advanced-rag-pipeline-modular-rag)
+9. [🔄 ETL Pipeline (Extract, Transform, Load)](#-9-etl-pipeline-extract-transform-load)
 
 ---
 
@@ -270,6 +272,167 @@ public String chatTemplate(String query, String userId) {
             .call()
             .content();
 }
+```
+
+---
+
+## 🌟 8. Advanced RAG Pipeline (Modular RAG)
+
+While simple RAG (just retrieving documents and injecting them) works, Spring AI provides an **Advanced RAG Pipeline** via the `RetrievalAugmentationAdvisor`. This modular pipeline allows you to pre-process queries, retrieve documents from various sources, post-process the documents, and augment the final prompt—all in a beautifully constructed builder pattern!
+
+### 📊 Advanced RAG Flow Diagram
+
+```mermaid
+flowchart TD
+    User(["User Query: '¿Qué es Java?' (Any Language)"]) --> PreP[1. Pre-Processing]
+    
+    subgraph PreP [Pre-Processing]
+        QT["RewriteQueryTransformer"] --> TT["TranslationQueryTransformer <br/> (Translates to English)"]
+        TT --> QE["MultiQueryExpander"]
+    end
+    
+    PreP --> Ret[2. Document Retrieval]
+    
+    subgraph Ret [Retrieval]
+        VS[VectorStoreDocumentRetriever]
+    end
+    
+    Ret --> PostP[3. Post-Processing]
+    
+    subgraph PostP [Post-Processing]
+        DJ[ConcatenationDocumentJoiner]
+    end
+    
+    PostP --> Aug[4. Augmentation]
+    
+    subgraph Aug [Augmentation]
+        CQA[ContextualQueryAugmenter]
+    end
+    
+    Aug --> LLM([Final LLM Call])
+```
+
+### ⚙️ Pipeline Steps & Classes Used
+
+Here is the step-by-step flow with an example using the query **"what is java"**:
+
+#### 1. Pre-processing: Query Transformation
+- **Class:** `RewriteQueryTransformer`
+- **What it does:** Uses an LLM to rewrite ambiguous or conversational queries into standalone, clear questions based on chat history.
+- **Example:** `"what is java"` ➡️ `"What is the Java programming language?"`
+
+- **Class:** `TranslationQueryTransformer`
+- **What it does:** Automatically detects and translates the user's query from *any language* into a single target language (English, as configured in our code `.targetLanguage("english")`) before passing it down the pipeline.
+- **Why use it:** Vector databases and embedding models often perform best when queries and stored documents are in the exact same language (typically English). By translating queries from *any* language to English upfront, you ensure highly accurate semantic matching. It allows your app to support a global, multi-lingual user base natively without needing to translate and duplicate your database content across different languages.
+- **Example:** `"¿Qué es Java?"` (Spanish) or `"qu'est-ce que java"` (French) ➡️ `"what is java"` (English)
+
+#### 2. Pre-processing: Query Expansion
+- **Class:** `MultiQueryExpander`
+- **What it does:** Uses an LLM to expand the single rewritten query into multiple variations. This casts a wider net when searching the vector database.
+- **Example:** Generates 3 queries: `"What is the Java programming language?"`, `"Define Java programming"`, `"Key features of the Java language"`.
+
+#### 3. Document Retrieval
+- **Class:** `VectorStoreDocumentRetriever`
+- **What it does:** Takes the multiple queries and searches the Vector Store (MariaDB) for matching documents. It applies filters like `topK` (limit to 10 results) and `similarityThreshold` (must be >= 0.5 similarity).
+- **Example:** Returns Document A (*"Java is a high-level..."*) and Document B (*"Java was developed by James Gosling..."*).
+
+#### 4. Post-processing: Document Joining
+- **Class:** `ConcatenationDocumentJoiner`
+- **What it does:** Takes the list of retrieved `Document` objects and stitches their text contents together into a single cohesive string, so the LLM can read it easily.
+- **Example:** Concatenates Doc A and Doc B into one block of text.
+
+#### 5. Augmentation
+- **Class:** `ContextualQueryAugmenter`
+- **What it does:** Takes the final joined context string and injects it into a prompt template alongside the user's original question.
+- **Example:** Creates a prompt like: *"Given this context: [Java is a high-level...], please answer: 'what is java'"*.
+
+#### 6. Final LLM Generation
+- The fully augmented prompt is sent to the LLM (Groq Llama model), which generates an accurate, hallucination-free response citing your database documents!
+
+### 💻 Code Implementation
+
+```java
+var ragAdvisor = RetrievalAugmentationAdvisor.builder()
+        .queryTransformers(
+                RewriteQueryTransformer.builder()
+                        .chatClientBuilder(chatClient.mutate().clone())
+                        .build(),
+                TranslationQueryTransformer.builder()
+                        .chatClientBuilder(chatClient.mutate().clone())
+                        .targetLanguage("english")
+                        .build()
+        )
+        .queryExpander(MultiQueryExpander.builder()
+                .chatClientBuilder(chatClient.mutate().clone())
+                .build())
+        .documentRetriever(VectorStoreDocumentRetriever.builder()
+                .vectorStore(vectorStore)
+                .topK(10)
+                .similarityThreshold(0.5)
+                .build())
+        .documentJoiner(new ConcatenationDocumentJoiner())
+        .queryAugmenter(ContextualQueryAugmenter.builder().build())
+        .build();
+
+return chatClient.prompt()
+        .advisors(ragAdvisor)
+        .user(userQuery)
+        .call()
+        .content();
+```
+
+---
+
+## 🔄 9. ETL Pipeline (Extract, Transform, Load)
+
+### 🤔 What is an ETL Pipeline in Spring AI?
+In the context of AI and RAG (Retrieval-Augmented Generation), an ETL pipeline is the foundational process of taking your raw private data and preparing it for the AI to understand. 
+
+- **E (Extract)**: Loading data from various sources using a `DocumentReader`. Spring AI provides numerous readers to extract data from virtually any format, including **JSON (`JsonReader`)**, **Text (`TextReader`)**, **PDFs (`PagePdfDocumentReader`, `ParagraphPdfDocumentReader`)**, as well as **HTML, Markdown, Word (.doc/.docx), and PowerPoint (.ppt/.pptx) files** using the powerful `TikaDocumentReader`.
+- **T (Transform)**: Processing the data to make it optimal for AI models using a `DocumentTransformer`. Large documents must be broken down into manageable pieces to fit into LLM context windows using transformers like `TokenTextSplitter`. You can also enrich the context using `KeywordMetadataEnricher` or `SummaryMetadataEnricher`.
+- **L (Load)**: Writing the transformed documents into a Vector Database (like MariaDB) where they can be searched quickly, using a `DocumentWriter`.
+
+### 📊 ETL Process Flow Diagram
+
+```mermaid
+flowchart LR
+    subgraph Extract [1. Extract]
+        JR[📄 JsonReader]
+        PR[📕 PdfReader]
+        TXT[📝 TextReader]
+        Tika[📊 TikaDocumentReader <br/> Word/PPT/HTML]
+    end
+
+    subgraph Transform [2. Transform]
+        TS[✂️ TokenTextSplitter]
+        MF[🧹 MetadataEnricher]
+    end
+
+    subgraph Load [3. Load]
+        VW[💾 VectorStore<br/>DocumentWriter]
+    end
+
+    Extract -->|Raw Documents| Transform
+    Transform -->|Chunked Documents| Load
+```
+
+### 💻 ETL Code Implementation (Putting it all together)
+
+Here is how you chain the Extract, Transform, and Load steps together in Spring AI:
+
+```java
+// 1. EXTRACT (Read)
+DocumentReader reader = new PagePdfDocumentReader(pdfResource);
+List<Document> rawDocs = reader.read();
+
+// 2. TRANSFORM (Split)
+DocumentTransformer splitter = new TokenTextSplitter();
+// Split large documents into smaller token-sized chunks (e.g., 800 tokens each)
+List<Document> chunkedDocs = splitter.apply(rawDocs);
+
+// 3. LOAD (Write)
+// Assuming you have autowired your MariaDBVectorStore
+vectorStore.add(chunkedDocs); // Automatically generates embeddings and saves!
 ```
 
 ---
