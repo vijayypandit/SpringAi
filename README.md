@@ -208,36 +208,60 @@ public void saveData(List<String> list) {
 
 ### 🔍 Similarity Search & RAG Advisors
 When a user asks a question, we need to find relevant data in the DB and give it to the AI.
-We do this using Spring AI's powerful Advisors (like `QuestionAnswerAdvisor` or the newer `RetrievalAugmentationAdvisor`)!
+We do this using Spring AI's powerful Advisors (specifically `RetrievalAugmentationAdvisor`)!
 
 **How it works:**
 1. The user asks a question.
-2. The Advisor automatically takes the query and converts it to a vector.
+2. The advisor pipeline transforms and expands the query.
 3. It performs a **Similarity Search** against MariaDB to find the most relevant documents.
-4. **Query Augmentation:** It uses the `ContextualQueryAugmenter` to take the retrieved documents and "augment" (inject) them into the AI's prompt. 
-   - *Pro Tip:* By setting `.allowEmptyContext(true)`, we guarantee that if the database finds *no* matching documents, the application won't fail. Instead, it allows the AI to gracefully fall back on its own baseline knowledge to answer the question!
+4. Context is joined and augmented into the final prompt before the LLM call.
+
+### 🧠 Actual `ChatServiceImpl` RAG Pipeline
+In `ChatServiceImpl`, we build a full advisor pipeline with the following stages:
+
+- `RewriteQueryTransformer`
+  - Rewrites the raw query with the ChatClient to improve clarity and intent.
+- `TranslationQueryTransformer`
+  - Translates the query to English before retrieval.
+- `MultiQueryExpander`
+  - Expands the query into multiple variants to improve retrieval recall.
+- `VectorStoreDocumentRetriever`
+  - Retrieves the top K documents from the MariaDB vector store using semantic similarity.
+- `ConcatenationDocumentJoiner`
+  - Joins retrieved documents into a single context payload.
+- `ContextualQueryAugmenter`
+  - Augments the final prompt with retrieved context so the model can answer using relevant data.
 
 ```java
-public String chatTemplate(String query, String userId) {
-    // Creating the Advisor to handle retrieval
-    var ragAdvisor = RetrievalAugmentationAdvisor.builder()
-            .documentRetriever(VectorStoreDocumentRetriever.builder()
-                    .vectorStore(vectorStore)
-                    .topK(3)
-                    .similarityThreshold(0.5)
-                    .build())
-            .queryAugmenter(ContextualQueryAugmenter.builder().allowEmptyContext(true).build())
-            .build();
+var ragAdvisor = RetrievalAugmentationAdvisor.builder()
+        .queryTransformers(
+                RewriteQueryTransformer.builder()
+                        .chatClientBuilder(chatClient.mutate().clone())
+                        .build(),
+                TranslationQueryTransformer.builder()
+                        .chatClientBuilder(chatClient.mutate().clone())
+                        .targetLanguage("english")
+                        .build())
+        .queryExpander(MultiQueryExpander.builder()
+                .chatClientBuilder(chatClient.mutate().clone())
+                .build())
+        .documentRetriever(VectorStoreDocumentRetriever.builder()
+                .vectorStore(vectorStore)
+                .topK(10)
+                .similarityThreshold(0.5)
+                .build())
+        .documentJoiner(new ConcatenationDocumentJoiner())
+        .queryAugmenter(ContextualQueryAugmenter.builder().build())
+        .build();
 
-    return this.chatClient
-            .prompt()
-            // This single line automates the entire RAG flow!
-            .advisors(ragAdvisor)
-            .user(user -> user.text(this.userMessage).param("query", query))
-            .call()
-            .content();
-}
+return chatClient.prompt()
+        .advisors(ragAdvisor)
+        .user(userQuery)
+        .call()
+        .content();
 ```
+
+This pipeline is the actual implementation in `ChatServiceImpl`, and it combines query rewriting, translation, expansion, retrieval, joining, and augmentation before the final LLM call.
 
 ### 🛠️ Manual Similarity Search (Alternative Approach)
 Instead of using automated Advisors, we can also perform a **Manual Similarity Search**. This is highly useful when you need finer control over the context building, or want to modify the documents before sending them to the LLM.
